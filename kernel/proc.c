@@ -5,12 +5,18 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "procinfo.h"
 
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
 
 struct proc *initproc;
+int quantums[4] = {1, 2, 4, 8};
+
+uint64 global_ticks = 0;
+#define BOOST_INTERVAL 100 
+
 
 int nextpid = 1;
 struct spinlock pid_lock;
@@ -124,6 +130,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -145,6 +152,11 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  p->priority = 0;        // Start at highest priority (queue 0)
+  p->ticks_used = 0;      // No ticks used yet
+  p->quantum = 1;         // Queue 0 has quantum of 1 tick
+  p->runtime = 0;         // No runtime accumulated yet
 
   return p;
 }
@@ -414,6 +426,34 @@ kwait(uint64 addr)
   }
 }
 
+
+// Boost all processes to highest priority (priority 0)
+// Called periodically to prevent starvation
+void
+boost_all_processes(void)
+{
+  struct proc *p;
+  int boosted_count = 0;
+  
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    
+    if(p->state != UNUSED && p->priority > 0) {
+      printf("BOOST: PID %d from priority %d to 0\n", p->pid, p->priority);
+      p->priority = 0;
+      p->quantum = quantums[0];  // Reset to priority 0 quantum
+      p->ticks_used = 0;         // Reset tick counter
+      boosted_count++;
+    }
+    
+    release(&p->lock);
+  }
+  
+  if(boosted_count > 0) {
+    printf("BOOST: Total %d processes boosted to priority 0\n", boosted_count);
+  }
+}
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
@@ -421,43 +461,53 @@ kwait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+
+// Time quantum for each priority level
+
 void
 scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
-
+  
   c->proc = 0;
   for(;;){
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting. Then turn them back off
-    // to avoid a possible race between an interrupt
-    // and wfi.
+    // Avoid deadlock by ensuring interrupts are on.
     intr_on();
-    intr_off();
 
+    // Try each priority level from highest (0) to lowest (3)
     int found = 0;
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+    for(int priority = 0; priority < 4; priority++) {
+      
+      // Look for a runnable process at this priority level
+      for(p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);
+        
+        if(p->state == RUNNABLE && p->priority == priority) {
+          // Found a runnable process at this priority!
+          p->state = RUNNING;
+          p->ticks_used = 0;  // Reset tick counter for new time slice
+          p->quantum = quantums[priority];  // Set quantum for this priority
+          c->proc = p;
+          
+          swtch(&c->context, &p->context);
+          
+          // Process is done running for now
+          c->proc = 0;
+          found = 1;
+        }
+        release(&p->lock);
+        
+        if(found) {
+          // Found and ran a process, restart from highest priority
+          break;
+        }
       }
-      release(&p->lock);
-    }
-    if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
-      asm volatile("wfi");
+      
+      if(found) {
+        // Restart the priority loop from 0 (highest priority)
+        break;
+      }
     }
   }
 }
@@ -687,4 +737,21 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+
+}
+int
+getprocinfo(struct procinfo *info)
+{
+  struct proc *p = myproc();  // Get current process
+  
+  if(info == 0)
+    return -1;
+  
+  info->pid = p->pid;
+  info->priority = p->priority;  
+  info->state = p->state;
+  safestrcpy(info->name, p->name, sizeof(p->name));
+  info->runtime = p->runtime;    
+  
+  return 0;
 }

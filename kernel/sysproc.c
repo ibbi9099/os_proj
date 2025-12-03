@@ -6,6 +6,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "vm.h"
+#include "procinfo.h"
 
 uint64
 sys_exit(void)
@@ -27,6 +28,27 @@ sys_fork(void)
 {
   return kfork();
 }
+uint64
+sys_sleep(void)
+{
+  int n;
+  uint ticks0;
+
+  argint(0, &n);   
+
+  acquire(&tickslock);
+  ticks0 = ticks;
+  while (ticks - ticks0 < n) {
+    if (myproc()->killed) {
+      release(&tickslock);
+      return -1;
+    }
+    sleep(&ticks, &tickslock);
+  }
+  release(&tickslock);
+  return 0;
+}
+
 
 uint64
 sys_wait(void)
@@ -106,4 +128,32 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_getprocinfo(void)
+{
+  uint64 addr;
+  struct procinfo info;
+  
+  argaddr(0, &addr);  
+  
+  if(getprocinfo(&info) < 0)
+    return -1;
+  
+  if(copyout(myproc()->pagetable, addr, (char *)&info, sizeof(info)) < 0)
+    return -1;
+  
+  return 0;
+}
+uint64
+sys_boostproc(void)
+{
+  extern void boost_all_processes(void);
+  
+  printf("\n=== MANUAL BOOST TRIGGERED ===\n");
+  boost_all_processes();
+  printf("=== MANUAL BOOST COMPLETE ===\n\n");
+  
+  return 0;
 }

@@ -24,6 +24,7 @@ int getpid(void);
 char* sys_sbrk(int,int);
 int pause(int);
 int uptime(void);
+int sleep(int);
 
 // ulib.c
 int stat(const char*, struct stat*);
@@ -47,3 +48,10 @@ void printf(const char*, ...) __attribute__ ((format (printf, 1, 2)));
 // umalloc.c
 void* malloc(uint);
 void free(void*);
+
+//Week1 stuff so far 
+struct procinfo;
+int getprocinfo(struct procinfo*);
+
+//week 3 yaay maybe trying 
+int boostproc(void);

@@ -79,7 +79,10 @@ struct trapframe {
   /* 280 */ uint64 t6;
 };
 
+
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+
+
 
 // Per-process state
 struct proc {
@@ -104,4 +107,8 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  int priority;        // Current queue level (0-3)
+int ticks_used;      // Ticks used in current quantum
+int quantum;         // Time quantum for current level
+uint64 runtime;
 };

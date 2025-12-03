@@ -6,6 +6,11 @@
 #include "proc.h"
 #include "defs.h"
 
+
+extern uint64 global_ticks;
+extern void boost_all_processes(void);
+#define BOOST_INTERVAL 100 
+
 struct spinlock tickslock;
 uint ticks;
 
@@ -81,8 +86,49 @@ usertrap(void)
     kexit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
+  // give up the CPU if this is a timer interrupt.
+if(which_dev == 2) {
+    p->ticks_used++;
+    p->runtime++;
+    
+    // Increment global tick counter for priority boosting
+    extern uint64 global_ticks;
+    extern void boost_all_processes(void);
+    global_ticks++;
+    
+    // Every BOOST_INTERVAL ticks, boost all processes to prevent starvation
+    if(global_ticks % BOOST_INTERVAL == 0) {
+        printf("\n=== PRIORITY BOOST at tick %ld ===\n", global_ticks);
+        boost_all_processes();
+        printf("=== BOOST COMPLETE ===\n\n");
+    }
+    
+    // Debug: Print every 10 ticks
+    // if(p->runtime % 10 == 0) {
+    //     printf("Timer: PID %d, runtime=%ld, queue_level=%d, ticks=%d, quantum=%d\n", 
+    //          p->pid, p->runtime, p->priority, p->ticks_used, p->quantum);
+    // }
+    
+    // Check if process has used up its quantum
+    if(p->ticks_used >= p->quantum) {
+        // Demote to lower priority if not already at lowest
+        if(p->priority < 3) {
+            p->priority++;
+            
+            // Update quantum for new priority level
+            extern int quantums[4];
+            p->quantum = quantums[p->priority];
+            
+            printf("DEMOTED: PID %d to priority %d (new quantum=%d)\n", 
+                   p->pid, p->priority, p->quantum);
+        }
+        
+        // Reset tick counter for the new quantum
+        p->ticks_used = 0;
+        
+        yield();
+    }
+}
 
   prepare_return();
 
@@ -146,21 +192,45 @@ kerneltrap()
     panic("kerneltrap: interrupts enabled");
 
   if((which_dev = devintr()) == 0){
-    // interrupt or trap from an unknown source
     printf("scause=0x%lx sepc=0x%lx stval=0x%lx\n", scause, r_sepc(), r_stval());
     panic("kerneltrap");
   }
 
-  // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0)
-    yield();
+  if(which_dev == 2 && myproc() != 0) {
+    struct proc *p = myproc();
+    p->ticks_used++;
+    p->runtime++;
+    
+    // Increment global tick counter
+    // extern uint64 global_ticks;
+    // extern void boost_all_processes(void);
+    // global_ticks++;
 
-  // the yield() may have caused some traps to occur,
-  // so restore trap registers for use by kernelvec.S's sepc instruction.
+    // if(global_ticks % 10 == 0) {
+    //     printf("Global ticks: %ld (PID %d runtime: %ld)\n", 
+    //            global_ticks, p->pid, p->runtime);
+    // }
+    
+    // // Boost every BOOST_INTERVAL ticks
+    // if(global_ticks % BOOST_INTERVAL == 0) {
+    //     printf("\n=== PRIORITY BOOST at tick %ld ===\n", global_ticks);
+    //     boost_all_processes();
+    //     printf("=== BOOST COMPLETE ===\n\n");
+    // }
+    
+    if(p->ticks_used >= p->quantum) {
+        if(p->priority < 3) {
+            p->priority++;
+            extern int quantums[4];
+            p->quantum = quantums[p->priority];
+        }
+        p->ticks_used = 0;
+        yield();
+    }
+}
   w_sepc(sepc);
   w_sstatus(sstatus);
 }
-
 void
 clockintr()
 {
